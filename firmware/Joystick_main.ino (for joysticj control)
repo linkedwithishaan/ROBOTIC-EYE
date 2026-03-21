@@ -1,0 +1,89 @@
+#include <ESP32Servo.h>
+
+// ---------------- SERVO PINS ----------------
+#define RIGHT_UPPER 14
+#define LEFT_UPPER1 27   // Servo 2
+#define RIGHT_LOWER 32
+#define VERTICAL    33
+#define HORIZONTAL  25
+#define LEFT_LOWER  26   // Servo 6
+
+// ---------------- JOYSTICK ----------------
+#define JOY_X 34
+#define JOY_Y 35
+#define JOY_SW 13
+
+Servo s_right_upper;
+Servo s_left_upper1;
+Servo s_right_lower;
+Servo s_vertical;
+Servo s_horizontal;
+Servo s_left_lower;
+
+int OPEN_POS = 90;
+
+// Closing direction → BOTH increase angle
+int CLOSE_POS = 130;
+
+void blink() {
+
+  // CLOSE (both move forward)
+  s_left_upper1.write(CLOSE_POS);
+  s_left_lower.write(CLOSE_POS);
+
+  s_right_upper.write(CLOSE_POS);
+  s_right_lower.write(CLOSE_POS);
+
+  delay(180);
+
+  // OPEN
+  s_left_upper1.write(OPEN_POS);
+  s_left_lower.write(OPEN_POS);
+
+  s_right_upper.write(OPEN_POS);
+  s_right_lower.write(OPEN_POS);
+}
+
+void setup() {
+
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+
+  s_right_upper.attach(RIGHT_UPPER, 500, 2400);
+  s_left_upper1.attach(LEFT_UPPER1, 500, 2400);
+  s_right_lower.attach(RIGHT_LOWER, 500, 2400);
+  s_vertical.attach(VERTICAL, 500, 2400);
+  s_horizontal.attach(HORIZONTAL, 500, 2400);
+  s_left_lower.attach(LEFT_LOWER, 500, 2400);
+
+  pinMode(JOY_SW, INPUT_PULLUP);
+
+  s_vertical.write(90);
+  s_horizontal.write(90);
+
+  s_right_upper.write(OPEN_POS);
+  s_right_lower.write(OPEN_POS);
+  s_left_upper1.write(OPEN_POS);
+  s_left_lower.write(OPEN_POS);
+}
+
+void loop() {
+
+  int joyX = analogRead(JOY_X);
+  int joyY = analogRead(JOY_Y);
+
+  int mappedX = map(joyX, 0, 4095, 50, 130);
+  int mappedY = map(joyY, 0, 4095, 50, 130);
+
+  s_horizontal.write(mappedX);
+  s_vertical.write(mappedY);
+
+  if (digitalRead(JOY_SW) == LOW) {
+    blink();
+    delay(250);
+  }
+
+  delay(15);
+}
