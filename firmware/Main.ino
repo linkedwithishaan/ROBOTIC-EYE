@@ -1,0 +1,433 @@
+#include <ESP32Servo.h>
+#include <WiFi.h>
+#include <WebServer.h>
+
+
+const char* ssid = "Utkarsha-2.4G";
+const char* password = "115312365";
+
+WebServer server(80);
+
+
+int motor_1 = 14;
+int motor_2 = 27;
+int motor_3 = 32;
+int motor_4 = 33;
+int motor_5 = 25;
+int motor_6 = 26;
+
+
+Servo mys1, mys2, mys3, mys4, mys5, mys6;
+
+
+byte Angle[6] = {100,90,150,30,90,90};
+
+bool wifiConnected = false;
+bool isClosed = false;
+
+
+void applyAngles()
+{
+  mys1.write(Angle[0]);
+  mys2.write(Angle[1]);
+  mys3.write(Angle[2]);
+  mys4.write(Angle[3]);
+  mys5.write(Angle[4]);
+  mys6.write(Angle[5]);
+}
+
+
+void handleSerial()
+{
+  if (Serial.available() >= 6)
+  {
+    Serial.readBytes(Angle, 6);
+    applyAngles();
+  }
+}
+
+
+void handleJoy()
+{
+  if(server.hasArg("joyX") && server.hasArg("joyY") && !isClosed)
+  {
+    int joyX = server.arg("joyX").toInt();
+    int joyY = server.arg("joyY").toInt();
+
+    int x = map(joyX,0,1023,-60,60);
+    int y = map(joyY,0,1023,-60,60);
+
+    Angle[4] = constrain(90 + x,30,150);
+    Angle[0] = constrain(100 + y,35,155);
+
+    applyAngles();
+  }
+
+  server.send(200,"text/plain","OK");
+}
+
+
+void handleToggle()
+{
+  isClosed = !isClosed;
+
+  if(isClosed)
+  {
+    Angle[2]=60;
+    Angle[3]=175;
+    Angle[1]=60;
+    Angle[5]=175;
+  }
+  else
+  {
+    Angle[2]=150;
+    Angle[3]=30;
+    Angle[1]=150;
+    Angle[5]=30;
+  }
+
+  applyAngles();
+
+  server.send(200,"text/plain","OK");
+}
+
+
+const char webpage[] PROGMEM = R"rawliteral(
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Joystick</title>
+<style>
+html,body{height:100%;margin:0}
+body{font-family:Arial,Helvetica,sans-serif;display:flex;align-items:center;justify-content:center;background:#f3f3f3}
+#container{display:flex;flex-direction:column;align-items:center}
+.joy-wrap{width:260px;height:260px;display:flex;align-items:center;justify-content:center}
+.joy-base{width:220px;height:220px;border-radius:50%;background:linear-gradient(#e6e6e6,#cfcfcf);box-shadow:inset 0 8px 20px rgba(0,0,0,0.12),0 6px 12px rgba(0,0,0,0.06);position:relative}
+.joy-knob{width:90px;height:90px;border-radius:50%;background:linear-gradient(#ffffff,#e9e9e9);box-shadow:0 8px 18px rgba(0,0,0,0.25);position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);touch-action:none}
+.values{margin-top:10px;text-align:center;color:#333}
+.values span{font-weight:600}
+@media (max-width:420px){.joy-wrap{transform:scale(0.85)}}
+</style>
+</head>
+<body>
+
+<div id="container">
+<div class="joy-wrap">
+<div class="joy-base" id="base">
+<div class="joy-knob" id="knob"></div>
+</div>
+</div>
+<div class="values">X: <span id="xv">512</span> &nbsp; Y: <span id="yv">512</span></div>
+</div>
+
+<script>
+
+const base = document.getElementById('base');
+const knob = document.getElementById('knob');
+const xv = document.getElementById('xv');
+const yv = document.getElementById('yv');
+
+const maxRange = (base.clientWidth - knob.clientWidth)/2;
+
+let cx=0, cy=0;
+let pointerId=null;
+
+function toAnalog(px)
+{
+return Math.round((px/maxRange+1)/2*1023);
+}
+
+function updateKnob(x,y)
+{
+knob.style.transform=`translate(${x}px,${y}px) translate(-50%,-50%)`;
+xv.textContent=toAnalog(x);
+yv.textContent=toAnalog(-y);
+}
+
+function handleMove(clientX,clientY)
+{
+const rect=base.getBoundingClientRect();
+
+const localX=clientX-(rect.left+rect.width/2);
+const localY=clientY-(rect.top+rect.height/2);
+
+const dist=Math.hypot(localX,localY);
+const angle=Math.atan2(localY,localX);
+
+const r=Math.min(dist,maxRange);
+
+cx=r*Math.cos(angle);
+cy=r*Math.sin(angle);
+
+updateKnob(cx,cy);
+}
+
+base.addEventListener('pointerdown',e=>{
+base.setPointerCapture(e.pointerId);
+pointerId=e.pointerId;
+handleMove(e.clientX,e.clientY);
+
+// toggle if near center
+if(Math.abs(cx)<10 && Math.abs(cy)<10)
+fetch('/toggle');
+});
+
+base.addEventListener('pointermove',e=>{
+if(pointerId===null||e.pointerId!==pointerId)return;
+handleMove(e.clientX,e.clientY);
+});
+
+base.addEventListener('pointerup',e=>{
+pointerId=null;
+cx=0;
+cy=0;
+updateKnob(0,0);
+});
+
+let lastX=512,lastY=512;
+
+function sendValues()
+{
+const ax=toAnalog(cx);
+const ay=toAnalog(-cy);
+
+if(Math.abs(ax-lastX)>10||Math.abs(ay-lastY)>10)
+{
+lastX=ax;
+lastY=ay;
+
+fetch('/JoyValue',{
+method:'POST',
+headers:{'Content-Type':'application/x-www-form-urlencoded'},
+body:`joyX=${ax}&joyY=${ay}`
+});
+}
+}
+
+setInterval(sendValues,50);
+
+updateKnob(0,0);
+
+</script>
+
+</body>
+</html>
+)rawliteral";
+
+
+void handleRoot()
+{
+  server.send(200,"text/html",webpage);
+}
+
+
+void setupWiFi()
+{
+  WiFi.begin(ssid,password);
+
+  Serial.print("Connecting to WiFi");
+
+  for(int i=0;i<20;i++)
+  {
+    if(WiFi.status()==WL_CONNECTED)
+    {
+      wifiConnected=true;
+      break;
+    }
+    delay(500);
+    Serial.print(".");
+  }
+
+  if(wifiConnected)
+  {
+    Serial.println("\nConnected!");
+    Serial.println(WiFi.localIP());
+
+    server.on("/",handleRoot);
+    server.on("/JoyValue",HTTP_POST,handleJoy);
+    server.on("/toggle",handleToggle);
+
+    server.begin();
+
+    Serial.println("Web UI Ready");
+  }
+  else
+  {
+    Serial.println("\nWiFi failed. Serial mode still works.");
+  }
+}
+
+
+void setup()
+{
+  Serial.begin(115200);
+
+  mys1.attach(motor_1);
+  mys2.attach(motor_2);
+  mys3.attach(motor_3);
+  mys4.attach(motor_4);
+  mys5.attach(motor_5);
+  mys6.attach(motor_6);
+
+  applyAngles();
+
+  setupWiFi();
+}
+
+
+void loop()
+{
+  handleSerial();
+
+  if(wifiConnected)
+  server.handleClient();
+
+  delay(10);
+}
+
+import serial
+import time
+import keyboard as ky
+import serial.tools.list_ports
+import shutil
+width = shutil.get_terminal_size().columns
+keywords=["esp32", "silicon labs", "cp210","cp210x", "ch340", "ch341", "ftdi", "espressif"]
+ports = serial.tools.list_ports.comports()
+found=''
+port=0
+found_status=False
+for por in ports:
+    if(any(p in (por.description).lower() for p in keywords)):
+        found_status=True
+        port=ports.index(por)
+        found=por
+        break
+RED = "\033[91m"
+RESET = "\033[0m"
+
+
+angles=[100,90,150,30,90,90]
+
+'''
+motor_1 = 14;
+motor_2 = 27; #left upper
+motor_3 = 32;
+motor_4 = 33;
+motor_5 = 25;
+motor_6 = 26;  #left eye low
+'''
+
+isclose=False
+def blink():
+    angles[2]=150
+    angles[3]=30
+    angles[1]=150
+    angles[5]=30
+    ser.write(bytearray(angles))
+
+    time.sleep(1)
+
+    angles[2]=60
+    angles[3]=175
+    angles[1]=60
+    angles[5]=175
+    ser.write(bytearray(angles))
+    
+    time.sleep(1)
+    
+    angles[2]=150
+    angles[3]=30
+    angles[1]=150
+    angles[5]=30
+    ser.write(bytearray(angles))
+    print("Blink done!!")
+
+def close():
+    global isclose
+    isclose= not isclose
+    if not isclose:
+        angles[2]=150
+        angles[3]=30
+        angles[1]=150
+        angles[5]=30
+        ser.write(bytearray(angles))
+        print("close status: False")
+    if isclose:
+        angles[2]=60
+        angles[3]=175
+        angles[1]=60
+        angles[5]=175
+        ser.write(bytearray(angles))
+        print("close status: True")
+    ser.write(bytearray(angles))
+
+def right():
+    if isclose:
+        print("Eyes closed, cannot move.")
+        return
+    angles[4]+=5
+    angles[4]=min(150,angles[4])
+    ser.write(bytearray(angles))
+    print("Moved right!!")
+
+def left():
+    if isclose:
+        print("Eyes closed, cannot move.")
+        return
+    angles[4]-=5
+    angles[4]=max(30,angles[4])
+    ser.write(bytearray(angles))
+    print("Moved left!!")
+
+
+def up():
+    if isclose:
+        print("Eyes closed, cannot move.")
+        return
+    angles[0]+=5
+    angles[0]=min(155,angles[0])
+    ser.write(bytearray(angles))
+    print("Eye moved up!!")
+
+def down():
+    if isclose:
+        print("Eyes closed, cannot move.")
+        return
+    angles[0]-=5
+    angles[0]=max(35,angles[0])
+    ser.write(bytearray(angles))
+    print("Eye moved down!!")
+
+if found_status:
+    try:
+       ser=serial.Serial(ports[port].device,115200,timeout=0.5)
+       print(f"The port found is: {found} : {port}")
+       print("-" * width)
+       print("Press B to blink once")
+       print("Press C to toggle closing of eyes")
+       print("Press ArrowRigt to move eye balls right")
+       print("Press ArrowLeft move eye balls left")
+       print("Press ArrowUp move eye balls UP")
+       print("Press ArrowDown move eye balls DOWN")
+
+
+       ky.add_hotkey("B",blink)
+       ky.add_hotkey("C",close)
+       ky.add_hotkey("right",right)
+       ky.add_hotkey("left",left)
+       ky.add_hotkey("up",up)
+       ky.add_hotkey("down",down)
+       
+       ky.wait('esc')
+       ser.write(bytearray(angles))
+       ser.flush()
+    except:
+        print("\n\nThe robotic eyess abruptly stopped!!!")
+        print("Please reconnect the robotic EYES\nExiting safely......")
+        time.sleep(4)
+else:
+    print(f"{RED}The device is not connected!!!")
+    print(f"Please connect the device and restart the file after connecting The robotic Arm!!!{RESET}")
+    time.sleep(5)
